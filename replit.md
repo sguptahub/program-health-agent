@@ -24,4 +24,11 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
+## Apps
+
+- **Program Health Intelligence Agent** (`artifacts/program-health`) — React + Vite frontend.
+  - Phase 1 skeleton: upload landing page (`/`) and static report placeholder (`/report`).
+  - Routing via `react-router-dom`, styling via Tailwind utilities + a small CSS variable palette in `src/index.css`.
+  - Health endpoint served by the shared API server at `/api/health` and `/api/healthz` returning `{ status: "ok", phase: 1 }`.
+
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

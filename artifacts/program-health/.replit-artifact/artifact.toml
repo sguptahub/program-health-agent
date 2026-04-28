@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Program Health Intelligence Agent"
+version = "1.0.0"
+id = "artifacts/program-health"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18185
+
+[services.development]
+run = "pnpm --filter @workspace/program-health run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/program-health", "run", "build" ]
+publicDir = "artifacts/program-health/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18185"
+BASE_PATH = "/"

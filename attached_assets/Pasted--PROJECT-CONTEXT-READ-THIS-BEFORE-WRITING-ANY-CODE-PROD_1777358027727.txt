@@ -1,0 +1,195 @@
+=== PROJECT CONTEXT — READ THIS BEFORE WRITING ANY CODE ===
+
+PRODUCT NAME: Program Health Intelligence Agent
+
+WHAT IT DOES:
+A web application that accepts a weekly program status Excel file and one 
+or more Word meeting transcript files, then uses multiple AI agents to 
+produce structured program health intelligence:
+- Workstream-level health ratings (Green / Amber / Red) with reasoning
+- Top 3 execution risks with mitigations
+- 3-bullet executive summary safe for stakeholder communication
+- Recommended agenda for the next program sync meeting
+
+DEPLOYMENT TARGET: Vercel. Configure everything from the start to ensure 
+smooth Vercel deployment. Use the same approach you would for a 
+React + Vite + Express monorepo deployed on Vercel.
+
+TECH STACK (non-negotiable — do not substitute or add to this):
+- Frontend: React + Vite + TypeScript
+- Backend: Express.js + TypeScript (separate server folder)
+- Monorepo structure: client/ for frontend, server/ for backend
+- Styling: Plain CSS or Tailwind utility classes only — no component 
+  libraries (no shadcn, no MUI, no Chakra)
+- Auth: None — no authentication in any phase
+- Database: None — no SQL or NoSQL database in any phase
+- Do NOT install any library not explicitly listed in phase instructions
+
+FOLDER STRUCTURE (enforce this exactly — do not deviate):
+/client
+  /src
+    /pages
+      Home.tsx           ← upload landing page
+      Report.tsx         ← report display page
+    /components          ← shared UI components
+    App.tsx
+    main.tsx
+    index.css
+  index.html
+/server
+  /src
+    /routes
+      health.ts          ← GET /api/health
+      ingest.ts          ← POST /api/ingest (Phase 2+)
+      analyze.ts         ← POST /api/analyze (Phase 4+)
+      memory.ts          ← GET /api/memory (Phase 3+)
+    /lib
+      types.ts           ← ALL shared TypeScript types
+      parsers/           ← Phase 2+
+      agents/            ← Phase 4+
+      memory/            ← Phase 3+
+      llm/               ← Phase 6+
+      rag/               ← Phase 5+
+      orchestrator.ts    ← Phase 4+
+      validators.ts      ← Phase 4+
+    index.ts             ← Express app entry point
+/prompts                 ← Phase 4+: agent system prompts as .md files
+/fixtures                ← Phase 7+: sample files for demo
+.env.example
+vercel.json              ← Vercel deployment configuration
+
+AGENT ARCHITECTURE (designed upfront — all phases must respect this):
+Four agents run in sequence:
+1. Workstream Health Agent → assesses each workstream, assigns RAG + reasoning
+2. Risk Detection Agent → identifies top 3 risks with mitigations
+3. Executive Synthesis Agent → produces exactly 3 stakeholder-ready bullets
+4. Agenda Recommendation Agent → builds recommended sync agenda (max 60 min)
+
+Agents are implemented in Phase 4. All earlier phases build the foundation 
+they depend on. All later phases extend without breaking them.
+
+FILE INPUT RULES (non-negotiable throughout all phases):
+- Exactly ONE .xlsx file (weekly program status)
+- ONE OR MORE .docx files (meeting transcripts — could be 1, could be 5)
+- System must work if only Excel is provided (confidence: Medium)
+- System must work if only transcripts are provided (confidence: Low)
+- System must work if both are provided (confidence: High)
+- Multiple .xlsx files = validation error
+- Zero files = validation error
+
+ENVIRONMENT VARIABLES (set in Vercel — never hardcode values):
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+ACTIVE_PROVIDER=openai
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+
+ERROR HANDLING RULES (apply to every phase):
+- Every API route must return { error: string } with appropriate 
+  HTTP status code on failure
+- Every async operation must be wrapped in try/catch
+- Client-side fetch calls must handle non-200 responses explicitly 
+  and show the error message to the user
+- Never return undefined from a typed function — use null and 
+  handle it explicitly
+
+CODE QUALITY RULES:
+- TypeScript strict mode on — no use of 'any' type
+- No ts-ignore comments
+- No unused imports or variables
+- All shared TypeScript types live in server/src/lib/types.ts
+- Do not add comments explaining what code does — write 
+  self-documenting code with clear variable names
+
+WHAT NOT TO DO:
+- Do not add authentication or user sessions
+- Do not add a database
+- Do not add any UI component library not listed above
+- Do not add features not listed in the current phase instructions
+- Do not modify files from previous phases unless explicitly 
+  instructed in the current phase
+- Do not add placeholder functions that throw "not implemented"
+- Do not add "future phase" TODO comments in code
+
+=== END PROJECT CONTEXT ===
+
+=== PHASE 1: SKELETON APP & DEPLOYMENT BACKBONE ===
+
+OBJECTIVE: Build a deployable React + Vite + Express skeleton with a 
+file upload UI and a static report placeholder. No file parsing, 
+no LLM calls, no data logic of any kind.
+
+BUILD THE FOLLOWING:
+
+1. Client (React + Vite + TypeScript):
+
+   client/src/pages/Home.tsx:
+   - Centered card with title "Program Health Intelligence Agent"
+   - Brief one-line description: "Upload your program status file 
+     and meeting transcripts to generate AI-powered health insights"
+   - File input that accepts .xlsx and .docx files (multiple allowed)
+   - Shows selected file names after selection
+   - "Analyze" button — disabled for now with a visible 
+     "Coming in Phase 2" tooltip or muted label
+   - Link to /report labeled "View sample report →"
+
+   client/src/pages/Report.tsx:
+   - Static page with heading "Program Health Report"
+   - Four empty section cards with placeholder text:
+     - "Workstream Health" 
+     - "Top Execution Risks"
+     - "Executive Summary"
+     - "Recommended Agenda"
+   - Link back "← Upload files"
+
+   client/src/App.tsx:
+   - React Router with two routes: / and /report
+   - Install react-router-dom
+
+2. Server (Express + TypeScript):
+
+   server/src/routes/health.ts:
+   - GET /api/health → returns { status: "ok", phase: 1 }
+
+   server/src/index.ts:
+   - Express app on port 3001
+   - Mounts /api/health route
+   - CORS enabled for Vite dev server (localhost:5173)
+   - JSON body parser middleware
+
+3. Environment setup:
+   - Create .env.example in root with all variables listed above
+   - Add .env to .gitignore
+   - client/.env with VITE_API_URL=http://localhost:3001
+
+4. Vercel configuration:
+   - Create vercel.json in root that correctly configures:
+     - Frontend (Vite build output) served at /
+     - Backend (Express) served at /api/*
+   - Ensure this works for both local dev and Vercel production
+
+5. Package.json scripts:
+   - Root package.json with:
+     "dev": runs both client and server concurrently
+     "build": builds both client and server
+     "start": starts production server
+   - Install concurrently for running both services together
+
+DONE CRITERIA:
+- npm run dev starts both client and server without errors
+- / renders the upload card
+- /report renders the four placeholder cards
+- /api/health returns { status: "ok", phase: 1 }
+- Clicking "View sample report →" navigates to /report
+- Clicking "← Upload files" navigates back to /
+- TypeScript compiles clean with no errors
+- No unused imports
+- vercel.json is present and correctly configured
+
+After generating all files, output:
+1. Exact commands to push this to GitHub
+2. Exact steps to deploy on Vercel (what to click, what settings 
+   to choose, which environment variables to set now)
+3. How to verify the deployment is working correctly
+
+=== END PHASE 1 ===
