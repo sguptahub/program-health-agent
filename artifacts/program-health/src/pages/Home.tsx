@@ -1,21 +1,88 @@
 import { useRef, useState, type ChangeEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+
+const apiBase = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setError(null);
     const selected = event.target.files;
     if (!selected) {
       setFiles([]);
       return;
     }
-    setFiles(Array.from(selected));
+    const list = Array.from(selected);
+    setFiles(list);
+
+    const xlsxCount = list.filter((f) =>
+      f.name.toLowerCase().endsWith(".xlsx"),
+    ).length;
+    if (xlsxCount > 1) {
+      setError("Please upload only one Excel status file");
+    }
   };
 
   const handleBrowseClick = () => {
     inputRef.current?.click();
+  };
+
+  const handleAnalyze = async () => {
+    setError(null);
+
+    if (files.length === 0) {
+      setError("Please select at least one file");
+      return;
+    }
+
+    const xlsxCount = files.filter((f) =>
+      f.name.toLowerCase().endsWith(".xlsx"),
+    ).length;
+
+    if (xlsxCount > 1) {
+      setError("Please upload only one Excel status file");
+      return;
+    }
+
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append("files", file, file.name);
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`${apiBase}/api/ingest`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        let message = `Request failed with status ${response.status}`;
+        try {
+          const data = (await response.json()) as { error?: string };
+          if (data?.error) message = data.error;
+        } catch {
+          // fall through to default message
+        }
+        setError(message);
+        return;
+      }
+
+      const bundle = await response.json();
+      localStorage.setItem("programHealth.signalBundle", JSON.stringify(bundle));
+      navigate("/report");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to upload files";
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -47,7 +114,8 @@ function Home() {
           <button
             type="button"
             onClick={handleBrowseClick}
-            className="w-full rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-100"
+            disabled={isSubmitting}
+            className="w-full rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Click to select .xlsx and .docx files
           </button>
@@ -67,20 +135,27 @@ function Home() {
               ))}
             </ul>
           )}
+
+          {error && (
+            <div
+              role="alert"
+              className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            >
+              {error}
+            </div>
+          )}
         </div>
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
-            disabled
-            title="Coming in Phase 2"
-            aria-label="Analyze (coming in Phase 2)"
-            className="inline-flex w-full cursor-not-allowed items-center justify-center rounded-lg bg-slate-300 px-5 py-2.5 text-sm font-medium text-white sm:w-auto"
+            onClick={handleAnalyze}
+            disabled={isSubmitting || files.length === 0}
+            className="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
           >
-            Analyze
-            <span className="ml-2 rounded bg-white/30 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-              Coming in Phase 2
-            </span>
+            {isSubmitting
+              ? `Analyzing ${files.length} file${files.length === 1 ? "" : "s"}...`
+              : "Analyze"}
           </button>
 
           <Link

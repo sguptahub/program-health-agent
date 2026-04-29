@@ -1,0 +1,143 @@
+OBJECTIVE: Parse one uploaded .xlsx file and one or more .docx 
+transcript files server-side. Extract structured signals per 
+workstream and return a normalized SignalBundle JSON. 
+No LLM calls. No agents. No memory.
+
+FILE INPUT RULES (non-negotiable):
+- Exactly ONE .xlsx file expected
+- ONE OR MORE .docx files may be provided
+- If multiple .docx files provided, ALL must be parsed and merged
+- If no .xlsx: proceed with transcript signals only, confidence: "Low"
+- If no .docx: proceed with Excel signals only, confidence: "Medium"
+- If both provided: confidence: "High"
+- Multiple .xlsx files → 400 error
+- Zero files → 400 error with clear message
+
+INSTALL THESE LIBRARIES (in artifacts/api-server):
+- xlsx
+- mammoth
+- uuid
+- multer (for multipart form data parsing)
+- @types/multer
+- @types/uuid
+
+TYPES TO DEFINE in artifacts/api-server/src/lib/types.ts:
+
+interface WorkstreamSignal {
+  workstream_name: string;
+  rag_status: "Green" | "Amber" | "Red" | "Unknown";
+  blockers: string[];
+  milestones_at_risk: string[];
+  percent_complete?: number;
+  transcript_mentions: string[];
+  transcript_sentiment: "Positive" | "Neutral" | "Negative" | "Unknown";
+  transcript_sources: string[];
+}
+
+interface SignalBundle {
+  run_id: string;
+  timestamp: string;
+  workstreams: WorkstreamSignal[];
+  artifact_flags: {
+    excel_provided: boolean;
+    transcript_count: number;
+    transcript_filenames: string[];
+  };
+  confidence: "High" | "Medium" | "Low";
+}
+
+BUILD THE FOLLOWING:
+
+1. artifacts/api-server/src/lib/parsers/excelParser.ts:
+   - Accept a single Buffer of the .xlsx file plus its filename
+   - Expect columns: Workstream, Status (Green/Amber/Red),
+     % Complete, Blockers, Milestones At Risk
+   - Return WorkstreamSignal[] (no transcript fields yet)
+   - Handle missing columns gracefully — use "Unknown" as default
+   - Handle empty rows gracefully — skip them
+
+2. artifacts/api-server/src/lib/parsers/transcriptParser.ts:
+   - Accept an ARRAY of { buffer: Buffer, filename: string }
+   - For each file use mammoth to extract plain text
+   - For each workstream name, extract sentences mentioning 
+     that workstream across ALL files combined
+   - Track which filename each mention came from
+   - Classify sentiment per workstream using keyword matching:
+     Negative keywords: blocked, blocker, delayed, risk, issue, 
+     concern, escalate, missed, behind, problem, stuck
+     Positive keywords: completed, delivered, on track, green, 
+     ahead, resolved, done, successful
+     If any negative keyword found → Negative
+     If only positive keywords → Positive
+     Otherwise → Neutral
+   - Return Map of workstream_name → { 
+       mentions: string[], 
+       sentiment: string, 
+       sources: string[] 
+     }
+
+3. artifacts/api-server/src/lib/normalizer.ts:
+   - Accept optional Excel signals and optional transcript map
+   - Merge into single WorkstreamSignal[]
+   - Union of workstreams from either source
+   - Populate transcript_sources on each WorkstreamSignal
+   - Set artifact_flags and confidence as per rules above
+   - Return complete SignalBundle
+
+4. artifacts/api-server/src/routes/ingest.ts:
+   - POST /api/ingest
+   - Use multer to accept multipart form data with files[] field
+   - Validate: zero files → 400 error
+   - Validate: more than one .xlsx → 400 error with message
+     "Please upload only one Excel status file"
+   - Route single .xlsx to excelParser
+   - Collect ALL .docx files into array → transcriptParser
+   - Call normalizer with both results
+   - Return SignalBundle as JSON
+   - All errors return { error: string } with status 400
+
+5. Register the new route in 
+   artifacts/api-server/src/app.ts or index.ts:
+   - Mount ingest route at /api/ingest
+
+6. Update artifacts/program-health/src/pages/Home.tsx:
+   - File input accepts multiple: accept=".xlsx,.docx" multiple
+   - Client-side validation before submitting:
+     If more than one .xlsx selected → show inline error:
+     "Please upload only one Excel status file"
+     If zero files → show "Please select at least one file"
+   - On Analyze click, POST files to /api/ingest using FormData
+   - Show loading state: "Analyzing [n] file(s)..." dynamically
+   - On success, store SignalBundle in localStorage and 
+     navigate to /report
+   - On error, show the error message from the API response
+   - Remove the "Coming in Phase 2" disabled state — 
+     Analyze button is now active
+
+7. Update artifacts/program-health/src/pages/Report.tsx:
+   - Read SignalBundle from localStorage on mount
+   - If no bundle found, show message "No report data found. 
+     Please upload files first." with link back to upload page
+   - Render in Workstream Health card:
+     A table with columns: Workstream, Status, % Complete, 
+     Blockers, Transcript Sentiment, Sources
+     Color code status: Green/Amber/Red text colors
+   - Show artifact summary above the table:
+     "Sources: [filename.xlsx] + [n] transcript file(s)"
+     List all transcript filenames
+   - Show confidence badge: High / Medium / Low
+   - Other three cards (Risks, Summary, Agenda) remain 
+     as placeholders
+
+DONE CRITERIA:
+- Upload 1 .xlsx + 2 .docx → SignalBundle returned with 
+  transcript_count: 2, confidence: "High"
+- Upload .xlsx only → confidence: "Medium", no errors
+- Upload .docx only → confidence: "Low", no errors
+- Upload 2 .xlsx files → 400 error shown in UI
+- Upload zero files → 400 error shown in UI
+- Report page shows workstream table with correct data
+- Report page shows artifact summary and confidence badge
+- Analyze button is now active and functional
+- No TypeScript errors
+- Pushes to GitHub and auto-deploys to Vercel without errors
