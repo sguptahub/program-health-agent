@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 type RagStatus = "Green" | "Amber" | "Red" | "Unknown";
+type Rag = "Green" | "Amber" | "Red";
 type Sentiment = "Positive" | "Neutral" | "Negative" | "Unknown";
 type Confidence = "High" | "Medium" | "Low";
+type DeltaDirection = "improved" | "degraded" | "stable" | "new";
 
 interface WorkstreamSignal {
   workstream_name: string;
@@ -26,6 +28,21 @@ interface SignalBundle {
     transcript_filenames: string[];
   };
   confidence: Confidence;
+}
+
+interface MemoryDelta {
+  workstream: string;
+  previous_rag?: Rag;
+  current_rag?: Rag;
+  direction: DeltaDirection;
+}
+
+interface IngestResponse {
+  signal_bundle: SignalBundle;
+  prior_context: {
+    last_run_timestamp: string | null;
+    deltas: MemoryDelta[];
+  };
 }
 
 const ragColor: Record<RagStatus, string> = {
@@ -56,21 +73,114 @@ const placeholderCards = [
   },
 ];
 
-function parseBundle(raw: string | null): SignalBundle | null {
+const STORAGE_KEY = "programHealth.ingestResponse";
+const LEGACY_BUNDLE_KEY = "programHealth.signalBundle";
+
+function parseStored(raw: string | null): IngestResponse | null {
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as SignalBundle;
+    const parsed = JSON.parse(raw) as Partial<IngestResponse> & SignalBundle;
+    if (
+      "signal_bundle" in parsed &&
+      parsed.signal_bundle &&
+      Array.isArray(parsed.signal_bundle.workstreams)
+    ) {
+      return parsed as IngestResponse;
+    }
+    if ("workstreams" in parsed && Array.isArray(parsed.workstreams)) {
+      return {
+        signal_bundle: parsed as SignalBundle,
+        prior_context: { last_run_timestamp: null, deltas: [] },
+      };
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
+const formatTimestamp = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+};
+
+const directionStyle: Record<
+  DeltaDirection,
+  { color: string; arrow: string; label: string }
+> = {
+  improved: {
+    color: "text-emerald-600",
+    arrow: "↑",
+    label: "improved",
+  },
+  degraded: {
+    color: "text-red-600",
+    arrow: "↓",
+    label: "degraded",
+  },
+  stable: {
+    color: "text-slate-500",
+    arrow: "",
+    label: "stable",
+  },
+  new: {
+    color: "text-blue-600",
+    arrow: "",
+    label: "new",
+  },
+};
+
+function DeltaRow({ delta }: { delta: MemoryDelta }) {
+  const style = directionStyle[delta.direction];
+
+  if (delta.direction === "new") {
+    return (
+      <li className="flex items-center gap-2 text-sm">
+        <span className="font-medium text-slate-900">{delta.workstream}</span>
+        <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+          NEW
+        </span>
+        {delta.current_rag && (
+          <span className="text-xs text-slate-500">{delta.current_rag}</span>
+        )}
+      </li>
+    );
+  }
+
+  if (delta.direction === "stable") {
+    return (
+      <li className="flex items-center gap-2 text-sm">
+        <span className="font-medium text-slate-900">{delta.workstream}:</span>
+        <span className={style.color}>stable</span>
+        {delta.current_rag && (
+          <span className="text-xs text-slate-500">({delta.current_rag})</span>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <li className="flex items-center gap-2 text-sm">
+      <span className="font-medium text-slate-900">{delta.workstream}:</span>
+      <span className="text-slate-700">
+        {delta.previous_rag ?? "—"} → {delta.current_rag ?? "—"}
+      </span>
+      <span className={`font-semibold ${style.color}`}>
+        {style.arrow} {style.label}
+      </span>
+    </li>
+  );
+}
+
 function Report() {
-  const [bundle, setBundle] = useState<SignalBundle | null>(null);
+  const [data, setData] = useState<IngestResponse | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setBundle(parseBundle(localStorage.getItem("programHealth.signalBundle")));
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) raw = localStorage.getItem(LEGACY_BUNDLE_KEY);
+    setData(parseStored(raw));
     setHydrated(true);
   }, []);
 
@@ -78,7 +188,7 @@ function Report() {
     return null;
   }
 
-  if (!bundle) {
+  if (!data) {
     return (
       <div className="min-h-screen px-6 py-12">
         <div className="mx-auto w-full max-w-xl text-center">
@@ -99,11 +209,8 @@ function Report() {
     );
   }
 
-  const {
-    workstreams,
-    artifact_flags,
-    confidence,
-  } = bundle;
+  const { signal_bundle: bundle, prior_context } = data;
+  const { workstreams, artifact_flags, confidence } = bundle;
 
   const excelLine = artifact_flags.excel_provided
     ? "Excel status file"
@@ -145,6 +252,43 @@ function Report() {
 
         <section
           className="mt-8 rounded-xl bg-white p-6"
+          style={{
+            border: "1px solid var(--border)",
+            boxShadow: "var(--shadow)",
+          }}
+        >
+          <h2 className="text-base font-semibold text-slate-900">
+            Previous Run Context
+          </h2>
+          {prior_context.last_run_timestamp === null ? (
+            <p className="mt-3 text-sm text-slate-500">
+              First run — no prior context available
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-slate-500">
+                Last run: {formatTimestamp(prior_context.last_run_timestamp)}
+              </p>
+              {prior_context.deltas.length === 0 ? (
+                <p className="mt-3 text-sm text-slate-500">
+                  No workstream comparisons available.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {prior_context.deltas.map((delta) => (
+                    <DeltaRow
+                      key={delta.workstream}
+                      delta={delta}
+                    />
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </section>
+
+        <section
+          className="mt-6 rounded-xl bg-white p-6"
           style={{
             border: "1px solid var(--border)",
             boxShadow: "var(--shadow)",

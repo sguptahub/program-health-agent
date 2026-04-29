@@ -1,0 +1,108 @@
+=== PHASE 3: LIGHTWEIGHT PROGRAM MEMORY ===
+
+OBJECTIVE: Persist SignalBundles and prior health assessments across 
+runs so Phase 4 agents can reason about trends. No LLM calls yet.
+
+IMPORTANT STORAGE DECISION:
+Do NOT use Upstash Redis or any external service.
+Use a simple in-memory store (module-level variable) on the Express 
+server. This works perfectly for demo purposes. If the server 
+restarts, memory resets — that is acceptable for this project.
+
+BUILD THE FOLLOWING:
+
+1. artifacts/api-server/src/lib/memory/memoryService.ts:
+
+   Define these types at the top of the file:
+
+   interface MemoryEntry {
+     run_id: string;
+     timestamp: string;
+     signal_bundle: SignalBundle;
+     health_ratings: Record<string, "Green" | "Amber" | "Red">;
+     artifact_flags: {
+       excel_provided: boolean;
+       transcript_count: number;
+     };
+   }
+
+   interface MemoryDelta {
+     workstream: string;
+     previous_rag?: "Green" | "Amber" | "Red";
+     current_rag?: "Green" | "Amber" | "Red";
+     direction: "improved" | "degraded" | "stable" | "new";
+   }
+
+   Implement these functions:
+   - getLastEntry(): MemoryEntry | null
+     Returns the last stored entry or null if none exists
+   
+   - saveEntry(entry: MemoryEntry): void
+     Stores entry in module-level variable — overwrites previous
+   
+   - getDelta(currentBundle: SignalBundle, 
+              priorEntry: MemoryEntry | null): MemoryDelta[]
+     Compares current workstream RAG statuses against prior entry
+     For each workstream in currentBundle:
+       - If not in priorEntry → direction: "new"
+       - If RAG improved (Red→Amber, Red→Green, Amber→Green) 
+         → direction: "improved"
+       - If RAG degraded (Green→Amber, Green→Red, Amber→Red) 
+         → direction: "degraded"
+       - If same → direction: "stable"
+     Returns array of MemoryDelta objects
+     If priorEntry is null → all workstreams get direction: "new"
+
+2. Update artifacts/api-server/src/routes/ingest.ts:
+   - After normalizing the SignalBundle, call memoryService.getLastEntry()
+   - Call memoryService.getDelta() with current bundle and prior entry
+   - Call memoryService.saveEntry() with the new bundle
+     (health_ratings will be empty {} at this stage — 
+      Phase 4 will populate it)
+   - Add prior_context to the response:
+     {
+       signal_bundle: SignalBundle,
+       prior_context: {
+         last_run_timestamp: string | null,
+         deltas: MemoryDelta[]
+       }
+     }
+
+3. artifacts/api-server/src/routes/memory.ts:
+   - GET /api/memory
+   - Returns current MemoryEntry or { entry: null } if empty
+   - Register this route in app.ts or index.ts at /api/memory
+
+4. Update artifacts/program-health/src/pages/Report.tsx:
+   - The response from /api/ingest now includes prior_context
+   - Store the full response (signal_bundle + prior_context) 
+     in localStorage
+   - Add a "Previous Run Context" section above the 
+     Workstream Health table:
+     - If last_run_timestamp is null: 
+       show "First run — no prior context available"
+     - If last_run_timestamp exists:
+       show "Last run: [formatted timestamp]"
+       For each delta show a trend row:
+         "Data Migration: Red → Amber ↑ improved" (green arrow)
+         "Testing: Green → Red ↓ degraded" (red arrow)
+         "Security Review: stable" (no arrow)
+         "New Workstream: new" (blue badge)
+     - Use color coding:
+       improved → green text with ↑
+       degraded → red text with ↓
+       stable → grey text
+       new → blue text with "NEW" badge
+
+DONE CRITERIA:
+- First run: saves to memory, report shows 
+  "First run — no prior context available"
+- Second run with same files: report shows all workstreams 
+  as "stable" with previous timestamp
+- Second run with modified Excel (change one RAG status): 
+  report shows correct delta direction for changed workstream
+- GET /api/memory returns the stored entry
+- No TypeScript errors
+- Pushes to GitHub and auto-deploys to Vercel without errors
+
+=== END PHASE 3 ===

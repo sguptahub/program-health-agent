@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
-import { processFiles } from "../lib/processFiles";
+import { runIngest } from "../lib/runIngest";
 import type { UploadedDocx } from "../lib/types";
 
 const upload = multer({
@@ -57,14 +57,15 @@ router.post(
         filename: f.originalname,
       }));
 
-      const bundle = await processFiles({
+      const response = await runIngest({
         excelFile,
         docxFiles: docxPayload,
       });
 
-      res.json(bundle);
+      res.json(response);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to process files";
+      const message =
+        err instanceof Error ? err.message : "Failed to process files";
       res.status(400).json({ error: message });
     }
   },

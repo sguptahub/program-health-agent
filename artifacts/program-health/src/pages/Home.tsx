@@ -73,8 +73,11 @@ function Home() {
         return;
       }
 
-      const bundle = await response.json();
-      localStorage.setItem("programHealth.signalBundle", JSON.stringify(bundle));
+      const ingestResponse = await response.json();
+      localStorage.setItem(
+        "programHealth.ingestResponse",
+        JSON.stringify(ingestResponse),
+      );
       navigate("/report");
     } catch (err) {
       const message =

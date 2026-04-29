@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import busboy from "busboy";
-import { processFiles } from "../artifacts/api-server/src/lib/processFiles";
+import { runIngest } from "../artifacts/api-server/src/lib/runIngest";
+import { getLastEntry } from "../artifacts/api-server/src/lib/memory/memoryService";
 import type { UploadedDocx } from "../artifacts/api-server/src/lib/types";
 
 export const config = {
@@ -72,7 +73,17 @@ export default async function handler(
     req.method === "GET" &&
     (path === "/api/health" || path === "/api/healthz" || path === "/api")
   ) {
-    res.status(200).json({ status: "ok", phase: 2 });
+    res.status(200).json({ status: "ok", phase: 3 });
+    return;
+  }
+
+  if (req.method === "GET" && path === "/api/memory") {
+    const entry = getLastEntry();
+    if (!entry) {
+      res.status(200).json({ entry: null });
+      return;
+    }
+    res.status(200).json(entry);
     return;
   }
 
@@ -115,12 +126,12 @@ export default async function handler(
         filename: f.filename,
       }));
 
-      const bundle = await processFiles({
+      const response = await runIngest({
         excelFile,
         docxFiles: docxPayload,
       });
 
-      res.status(200).json(bundle);
+      res.status(200).json(response);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to process files";
