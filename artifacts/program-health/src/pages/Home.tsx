@@ -3,12 +3,97 @@ import { Link, useNavigate } from "react-router-dom";
 
 const apiBase = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+type StepStatus = "pending" | "running" | "done" | "failed";
+
+interface Step {
+  key: string;
+  label: string;
+  status: StepStatus;
+}
+
+const INITIAL_STEPS: Step[] = [
+  { key: "ingest", label: "Parsing uploaded files...", status: "pending" },
+  {
+    key: "workstream",
+    label: "Assessing workstream health...",
+    status: "pending",
+  },
+  { key: "risks", label: "Detecting execution risks...", status: "pending" },
+  {
+    key: "summary",
+    label: "Synthesizing executive summary...",
+    status: "pending",
+  },
+  { key: "agenda", label: "Building recommended agenda...", status: "pending" },
+];
+
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"
+      aria-hidden
+    />
+  );
+}
+
+function CheckIcon() {
+  return (
+    <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold leading-none text-white">
+      ✓
+    </span>
+  );
+}
+
+function FailIcon() {
+  return (
+    <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
+      !
+    </span>
+  );
+}
+
+function PendingIcon() {
+  return (
+    <span
+      className="inline-block h-3 w-3 rounded-full border border-slate-300 bg-white"
+      aria-hidden
+    />
+  );
+}
+
+function StepRow({ step }: { step: Step }) {
+  let icon;
+  if (step.status === "running") icon = <Spinner />;
+  else if (step.status === "done") icon = <CheckIcon />;
+  else if (step.status === "failed") icon = <FailIcon />;
+  else icon = <PendingIcon />;
+
+  let textColor = "text-slate-400";
+  if (step.status === "running") textColor = "text-slate-900";
+  else if (step.status === "done") textColor = "text-slate-700";
+  else if (step.status === "failed") textColor = "text-red-600";
+
+  return (
+    <li className="flex items-center gap-3 text-sm">
+      <span className="flex h-4 w-4 items-center justify-center">{icon}</span>
+      <span className={textColor}>{step.label}</span>
+    </li>
+  );
+}
+
 function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [steps, setSteps] = useState<Step[]>(INITIAL_STEPS);
+
+  const setStepStatus = (key: string, status: StepStatus) => {
+    setSteps((prev) =>
+      prev.map((s) => (s.key === key ? { ...s, status } : s)),
+    );
+  };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     setError(null);
@@ -32,8 +117,11 @@ function Home() {
     inputRef.current?.click();
   };
 
+  const resetSteps = () => setSteps(INITIAL_STEPS);
+
   const handleAnalyze = async () => {
     setError(null);
+    resetSteps();
 
     if (files.length === 0) {
       setError("Please select at least one file");
@@ -56,28 +144,83 @@ function Home() {
 
     setIsSubmitting(true);
     try {
-      const response = await fetch(`${apiBase}/api/ingest`, {
+      setStepStatus("ingest", "running");
+      const ingestResp = await fetch(`${apiBase}/api/ingest`, {
         method: "POST",
         body: formData,
       });
 
-      if (!response.ok) {
-        let message = `Request failed with status ${response.status}`;
+      if (!ingestResp.ok) {
+        let message = `Request failed with status ${ingestResp.status}`;
         try {
-          const data = (await response.json()) as { error?: string };
+          const data = (await ingestResp.json()) as { error?: string };
           if (data?.error) message = data.error;
         } catch {
-          // fall through to default message
+          // fall through
         }
+        setStepStatus("ingest", "failed");
         setError(message);
         return;
       }
 
-      const ingestResponse = await response.json();
+      const ingestData = await ingestResp.json();
+      setStepStatus("ingest", "done");
       localStorage.setItem(
         "programHealth.ingestResponse",
-        JSON.stringify(ingestResponse),
+        JSON.stringify(ingestData),
       );
+
+      setStepStatus("workstream", "running");
+      const analyzeResp = await fetch(`${apiBase}/api/analyze`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ signal_bundle: ingestData.signal_bundle }),
+      });
+
+      if (!analyzeResp.ok) {
+        let message = `Analysis failed with status ${analyzeResp.status}`;
+        try {
+          const data = (await analyzeResp.json()) as { error?: string };
+          if (data?.error) message = data.error;
+        } catch {
+          // fall through
+        }
+        setStepStatus("workstream", "failed");
+        setError(message);
+        return;
+      }
+
+      const analysis = await analyzeResp.json();
+
+      const errorAgents: string[] =
+        Array.isArray(analysis?.errors)
+          ? analysis.errors.map((e: { agent: string }) => e.agent)
+          : [];
+
+      const stepFor = (
+        key: "workstream" | "risks" | "summary" | "agenda",
+        agentName: string,
+        section: unknown,
+      ) => {
+        if (errorAgents.includes(agentName)) {
+          setStepStatus(key, "failed");
+        } else if (section !== null && section !== undefined) {
+          setStepStatus(key, "done");
+        } else {
+          setStepStatus(key, "failed");
+        }
+      };
+
+      stepFor("workstream", "WorkstreamHealthAgent", analysis.workstream_health);
+      stepFor("risks", "RiskDetectionAgent", analysis.top_risks);
+      stepFor("summary", "ExecutiveSynthesisAgent", analysis.exec_summary);
+      stepFor("agenda", "AgendaRecommendationAgent", analysis.agenda);
+
+      localStorage.setItem(
+        "programHealth.analysis",
+        JSON.stringify(analysis),
+      );
+
       navigate("/report");
     } catch (err) {
       const message =
@@ -147,6 +290,19 @@ function Home() {
               {error}
             </div>
           )}
+
+          {isSubmitting && (
+            <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Analysis pipeline
+              </p>
+              <ul className="mt-2 space-y-2">
+                {steps.map((step) => (
+                  <StepRow key={step.key} step={step} />
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -165,7 +321,7 @@ function Home() {
             to="/report"
             className="text-sm font-medium text-blue-600 hover:underline"
           >
-            View sample report →
+            View last report →
           </Link>
         </div>
       </div>

@@ -1,8 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import busboy from "busboy";
 import { runIngest } from "../artifacts/api-server/src/lib/runIngest";
-import { getLastEntry } from "../artifacts/api-server/src/lib/memory/memoryService";
-import type { UploadedDocx } from "../artifacts/api-server/src/lib/types";
+import { runAnalysis } from "../artifacts/api-server/src/lib/orchestrator";
+import {
+  getDelta,
+  getLastEntry,
+} from "../artifacts/api-server/src/lib/memory/memoryService";
+import type {
+  SignalBundle,
+  UploadedDocx,
+} from "../artifacts/api-server/src/lib/types";
 
 export const config = {
   api: {
@@ -53,6 +60,36 @@ function parseMultipart(req: VercelRequest): Promise<ParsedFile[]> {
   });
 }
 
+function readJsonBody(req: VercelRequest): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      try {
+        const body = Buffer.concat(chunks).toString("utf8");
+        resolve(body ? JSON.parse(body) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on("error", (err) => reject(err));
+  });
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+const isSignalBundle = (v: unknown): v is SignalBundle => {
+  if (!isObj(v)) return false;
+  return (
+    typeof v.run_id === "string" &&
+    typeof v.timestamp === "string" &&
+    Array.isArray(v.workstreams) &&
+    isObj(v.artifact_flags) &&
+    typeof v.confidence === "string"
+  );
+};
+
 const getExtension = (filename: string): string => {
   const idx = filename.lastIndexOf(".");
   return idx === -1 ? "" : filename.slice(idx).toLowerCase();
@@ -73,7 +110,7 @@ export default async function handler(
     req.method === "GET" &&
     (path === "/api/health" || path === "/api/healthz" || path === "/api")
   ) {
-    res.status(200).json({ status: "ok", phase: 3 });
+    res.status(200).json({ status: "ok", phase: 4 });
     return;
   }
 
@@ -136,6 +173,28 @@ export default async function handler(
       const message =
         err instanceof Error ? err.message : "Failed to process files";
       res.status(400).json({ error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && path === "/api/analyze") {
+    try {
+      const body = await readJsonBody(req);
+      const bundle = isObj(body) ? body.signal_bundle : undefined;
+      if (!isSignalBundle(bundle)) {
+        res.status(400).json({
+          error: "Request body must include a valid signal_bundle object",
+        });
+        return;
+      }
+      const priorEntry = getLastEntry();
+      const deltas = getDelta(bundle, priorEntry);
+      const result = await runAnalysis(bundle, deltas);
+      res.status(200).json(result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to run analysis";
+      res.status(500).json({ error: message });
     }
     return;
   }

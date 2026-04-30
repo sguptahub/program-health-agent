@@ -1,0 +1,301 @@
+=== PHASE 4: AGENT REASONING IMPLEMENTATION ===
+
+OBJECTIVE: Implement all four AI agents that reason over the 
+SignalBundle to produce structured program health intelligence.
+This is the core value phase.
+
+IMPORTANT RULES FOR LLM CALLS:
+- Use OpenAI GPT-4o as the provider
+- All API calls use response_format: { type: "json_object" }
+- All agent system prompts must begin with:
+  "You respond only in valid JSON. Do not include markdown, 
+   code fences, or any text outside the JSON object."
+- Always JSON.parse() the response inside try/catch
+- If parsing fails, retry the call once before throwing error
+- Temperature: 0.2 for all agents (deterministic outputs)
+- Import OpenAI key from process.env.OPENAI_API_KEY
+
+INSTALL IN artifacts/api-server:
+- openai
+
+ADD THESE TYPES to artifacts/api-server/src/lib/types.ts:
+
+interface WorkstreamHealth {
+  workstream_name: string;
+  rag: "Green" | "Amber" | "Red";
+  confidence: "High" | "Medium" | "Low";
+  reasoning: string;
+  evidence_signals: string[];
+}
+
+interface ExecutionRisk {
+  rank: 1 | 2 | 3;
+  title: string;
+  severity: "Critical" | "High" | "Medium";
+  affected_workstreams: string[];
+  evidence_summary: string;
+  mitigation: string;
+  low_confidence_inferred: boolean;
+}
+
+interface ExecSummary {
+  bullet_1_overall_health: string;
+  bullet_2_critical_risk: string;
+  bullet_3_forward_action: string;
+}
+
+interface AgendaItem {
+  order: number;
+  title: string;
+  time_minutes: number;
+  rationale: string;
+  suggested_owner: string;
+}
+
+interface AnalysisResult {
+  run_id: string;
+  workstream_health: WorkstreamHealth[];
+  top_risks: ExecutionRisk[];
+  exec_summary: ExecSummary;
+  agenda: AgendaItem[];
+  total_agenda_minutes: number;
+  provider_used: string;
+}
+
+BUILD THE FOLLOWING:
+
+1. artifacts/api-server/src/lib/agents/baseAgent.ts:
+   - Abstract class BaseAgent
+   - Constructor accepts: systemPromptPath: string 
+     (path to .md file in /prompts folder)
+   - Method: protected async call(userMessage: string): 
+     Promise<string>
+     - Reads system prompt from file at construction time
+     - Calls OpenAI chat completion with:
+       model: "gpt-4o"
+       temperature: 0.2
+       response_format: { type: "json_object" }
+     - Returns content string
+     - Wraps in try/catch, retries once on failure
+   - Log token usage to console in development
+
+2. Create prompt files in /prompts folder:
+
+   /prompts/workstream-health-agent.md:
+   You respond only in valid JSON. Do not include markdown, 
+   code fences, or any text outside the JSON object.
+   
+   You are a program health assessment specialist. Your job is 
+   to assess each workstream independently and assign a RAG 
+   status with clear reasoning.
+   
+   Rules you must follow:
+   - Assess every workstream present in the input data
+   - Never assign Green if any blocker is listed as unresolved
+   - Lower confidence to Low when only one artifact type 
+     was provided (excel_provided or transcript_count is 0)
+   - Cite specific signals from the input as evidence
+   - Never invent workstream names not present in the input
+   - Return a JSON array of WorkstreamHealth objects
+
+   /prompts/risk-detection-agent.md:
+   You respond only in valid JSON. Do not include markdown, 
+   code fences, or any text outside the JSON object.
+   
+   You are a program risk analyst. Your job is to identify 
+   exactly the top 3 execution risks across the program.
+   
+   Rules you must follow:
+   - Return exactly 3 risks — no more, no fewer
+   - Rank risks by severity multiplied by likelihood
+   - Each risk must cite at least one concrete signal
+   - Set low_confidence_inferred to true when input has 
+     only one artifact type
+   - Propose one concrete mitigation per risk
+   - Never duplicate content already in workstream health
+   - Return a JSON array of exactly 3 ExecutionRisk objects
+
+   /prompts/executive-synthesis-agent.md:
+   You respond only in valid JSON. Do not include markdown, 
+   code fences, or any text outside the JSON object.
+   
+   You are an executive communications specialist. Your job 
+   is to produce a concise stakeholder-ready program summary.
+   
+   Rules you must follow:
+   - Produce exactly 3 bullets — no more, no fewer
+   - bullet_1: overall program health narrative
+   - bullet_2: most critical risk and its business implication
+   - bullet_3: forward-looking recommended action
+   - Each bullet is one sentence only
+   - No technical jargon (no RAG, no signal bundle, 
+     no workstream IDs)
+   - Never claim overall Green health if any workstream is Red
+   - Safe to paste directly into a leadership email
+   - Return a JSON object matching ExecSummary
+
+   /prompts/agenda-recommendation-agent.md:
+   You respond only in valid JSON. Do not include markdown, 
+   code fences, or any text outside the JSON object.
+   
+   You are a program management expert. Your job is to build 
+   a recommended agenda for the next program sync meeting.
+   
+   Rules you must follow:
+   - Prioritize Red workstreams first, then Amber, then Green
+   - Total time allocation must not exceed 60 minutes
+   - Each agenda item must have a supporting signal
+   - Use role types for owners not specific names unless 
+     names appear in transcript mentions
+   - Return a JSON array of AgendaItem objects
+
+3. artifacts/api-server/src/lib/agents/workstreamHealthAgent.ts:
+   extends BaseAgent
+   - Constructor: super('prompts/workstream-health-agent.md')
+   - Method: async analyze(bundle: SignalBundle, 
+     deltas: MemoryDelta[]): Promise<WorkstreamHealth[]>
+   - Build user message containing:
+     - All workstream signals from bundle
+     - artifact_flags and confidence level
+     - Prior run deltas if available
+   - Call this.call(userMessage)
+   - Parse and validate response:
+     Every workstream in bundle must appear in output
+     No new workstream names allowed
+   - Return WorkstreamHealth[]
+
+4. artifacts/api-server/src/lib/agents/riskDetectionAgent.ts:
+   extends BaseAgent
+   - Constructor: super('prompts/risk-detection-agent.md')
+   - Method: async analyze(health: WorkstreamHealth[], 
+     bundle: SignalBundle, 
+     deltas: MemoryDelta[]): Promise<ExecutionRisk[]>
+   - Build user message containing:
+     - Workstream health outputs
+     - Raw blocker signals from bundle
+     - artifact_flags
+     - Prior deltas
+   - Call this.call(userMessage)
+   - Validate: response must contain exactly 3 risks
+   - If not exactly 3, retry once with correction message:
+     "Your response must contain exactly 3 risks. 
+      You returned [n]. Please fix and return exactly 3."
+   - Return ExecutionRisk[]
+
+5. artifacts/api-server/src/lib/agents/executiveSynthesisAgent.ts:
+   extends BaseAgent
+   - Constructor: super('prompts/executive-synthesis-agent.md')
+   - Method: async analyze(health: WorkstreamHealth[], 
+     risks: ExecutionRisk[]): Promise<ExecSummary>
+   - Build user message with health outputs and risks
+   - Call this.call(userMessage)
+   - Validate: all 3 bullet fields must be non-empty strings
+   - Return ExecSummary
+
+6. artifacts/api-server/src/lib/agents/agendaRecommendationAgent.ts:
+   extends BaseAgent
+   - Constructor: super('prompts/agenda-recommendation-agent.md')
+   - Method: async analyze(health: WorkstreamHealth[], 
+     risks: ExecutionRisk[], 
+     summary: ExecSummary): Promise<AgendaItem[]>
+   - Build user message with all prior agent outputs
+   - Call this.call(userMessage)
+   - Validate: sum of time_minutes must not exceed 60
+   - If over 60, retry once with correction message:
+     "Total agenda time exceeds 60 minutes. 
+      Please reduce time allocations and resubmit."
+   - Calculate total_agenda_minutes
+   - Return AgendaItem[]
+
+7. artifacts/api-server/src/lib/validators.ts:
+   - validateWorkstreamHealth(data: unknown, 
+     bundle: SignalBundle): WorkstreamHealth[]
+     Throws if workstream names don't match bundle exactly
+   
+   - validateTopRisks(data: unknown): ExecutionRisk[]
+     Throws if length is not exactly 3 or required 
+     fields are missing
+   
+   - validateExecSummary(data: unknown): ExecSummary
+     Throws if any bullet field is empty or missing
+   
+   - validateAgenda(data: unknown): 
+     { items: AgendaItem[], total: number }
+     Throws if total_agenda_minutes exceeds 60
+
+8. artifacts/api-server/src/lib/orchestrator.ts:
+   - async function runAnalysis(
+       bundle: SignalBundle, 
+       deltas: MemoryDelta[]
+     ): Promise<AnalysisResult>
+   - Instantiate all four agents
+   - Run in sequence:
+     1. workstreamHealthAgent.analyze(bundle, deltas)
+     2. riskDetectionAgent.analyze(health, bundle, deltas)
+     3. executiveSynthesisAgent.analyze(health, risks)
+     4. agendaRecommendationAgent.analyze(health, risks, summary)
+   - If any agent fails after retry: return partial result 
+     with failed section as null and error field
+   - Update memoryService with health_ratings from step 1
+   - Return complete AnalysisResult with provider_used: "openai"
+
+9. artifacts/api-server/src/routes/analyze.ts:
+   - POST /api/analyze
+   - Accept { signal_bundle: SignalBundle } JSON body
+   - Fetch prior memory context using memoryService.getLastEntry()
+   - Get deltas using memoryService.getDelta()
+   - Call orchestrator.runAnalysis(bundle, deltas)
+   - Return AnalysisResult as JSON
+   - Register this route in app.ts at /api/analyze
+
+10. Update artifacts/program-health/src/pages/Home.tsx:
+    - After /api/ingest succeeds, automatically POST 
+      SignalBundle to /api/analyze
+    - Show per-agent loading steps as a vertical stepper:
+      Step 1: "Assessing workstream health..."
+      Step 2: "Detecting execution risks..."
+      Step 3: "Synthesizing executive summary..."
+      Step 4: "Building recommended agenda..."
+    - Each step shows spinner while running, 
+      checkmark when done
+    - On complete, store AnalysisResult in localStorage 
+      and navigate to /report
+
+11. Update artifacts/program-health/src/pages/Report.tsx:
+    - Read AnalysisResult from localStorage
+    - Workstream Health card:
+      Table with columns: Workstream, RAG, Confidence, 
+      Reasoning, Evidence
+      RAG badge colors: 
+        Green → green background white text
+        Amber → amber background white text  
+        Red → red background white text
+      Confidence badge: High/Medium/Low
+    - Top Execution Risks card:
+      Three ranked cards showing: rank number, title, 
+      severity badge, affected workstreams, 
+      evidence summary, mitigation
+    - Executive Summary card:
+      Three numbered bullets in a clean summary box
+      Label each: "Program Health", "Critical Risk", 
+      "Recommended Action"
+    - Recommended Agenda card:
+      Ordered list with: item title, time chip, 
+      rationale, owner
+      Show total time at bottom: "Total: XX / 60 minutes"
+    - Show "Analyzed with: OpenAI GPT-4o" in report header
+
+DONE CRITERIA:
+- Upload both fixture files → all four agent sections 
+  populate with real AI-generated content
+- Exactly 3 risks appear
+- Exactly 3 executive summary bullets appear  
+- Agenda total does not exceed 60 minutes
+- RAG badges show correct colors
+- Confidence levels shown on all workstream health cards
+- Loading stepper shows each agent completing in sequence
+- Partial failure of one agent does not blank entire report
+- No TypeScript errors
+- Pushes to GitHub and auto-deploys to Vercel
+
+=== END PHASE 4 ===
