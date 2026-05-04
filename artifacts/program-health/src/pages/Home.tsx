@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useState, type ChangeEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 const apiBase = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -82,7 +82,6 @@ function StepRow({ step }: { step: Step }) {
 }
 
 function Home() {
-  const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -111,10 +110,6 @@ function Home() {
     if (xlsxCount > 1) {
       setError("Please upload only one Excel status file");
     }
-  };
-
-  const handleBrowseClick = () => {
-    inputRef.current?.click();
   };
 
   const resetSteps = () => setSteps(INITIAL_STEPS);
@@ -249,22 +244,21 @@ function Home() {
         </p>
 
         <div className="mt-8">
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".xlsx,.docx"
-            multiple
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={handleBrowseClick}
-            disabled={isSubmitting}
-            className="w-full rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+          <label
+            htmlFor="file-upload"
+            className={`block w-full rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-100 ${isSubmitting ? "cursor-not-allowed opacity-60 pointer-events-none" : "cursor-pointer"}`}
           >
             Click to select .xlsx and .docx files
-          </button>
+            <input
+              id="file-upload"
+              type="file"
+              accept=".xlsx,.docx"
+              multiple
+              disabled={isSubmitting}
+              onChange={handleFileChange}
+              className="sr-only"
+            />
+          </label>
 
           {files.length > 0 && (
             <ul className="mt-4 space-y-1 text-sm text-slate-700">
