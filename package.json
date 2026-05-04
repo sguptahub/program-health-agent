@@ -11,6 +11,7 @@
   "private": true,
   "devDependencies": {
     "@types/busboy": "^1.5.4",
+    "@types/node": "catalog:",
     "@vercel/node": "^5.7.13",
     "busboy": "^1.6.0",
     "prettier": "^3.8.1",
