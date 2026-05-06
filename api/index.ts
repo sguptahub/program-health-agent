@@ -37,10 +37,10 @@ function parseMultipart(req: VercelRequest): Promise<ParsedFile[]> {
 
     const files: ParsedFile[] = [];
 
-    bb.on("file", (fieldname, fileStream, info) => {
+    bb.on("file", (fieldname: string, fileStream: NodeJS.ReadableStream & { on: (event: string, listener: (...args: unknown[]) => void) => unknown }, info: { filename?: string; mimeType?: string }) => {
       const chunks: Buffer[] = [];
-      fileStream.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
+      fileStream.on("data", (chunk: unknown) => {
+        chunks.push(chunk as Buffer);
       });
       fileStream.on("end", () => {
         files.push({
@@ -50,7 +50,7 @@ function parseMultipart(req: VercelRequest): Promise<ParsedFile[]> {
           buffer: Buffer.concat(chunks),
         });
       });
-      fileStream.on("error", (err) => reject(err));
+      fileStream.on("error", (err: unknown) => reject(err));
     });
 
     bb.on("close", () => resolve(files));
@@ -72,7 +72,7 @@ function readJsonBody(req: VercelRequest): Promise<unknown> {
         reject(err);
       }
     });
-    req.on("error", (err) => reject(err));
+    req.on("error", (err: Error) => reject(err));
   });
 }
 
@@ -97,7 +97,16 @@ const getExtension = (filename: string): string => {
 
 function normalizePath(url: string | undefined): string {
   const path = (url ?? "").split("?")[0] ?? "";
-  return path.replace(/\/+$/, "");
+  return path.replace(/\/+$/, "") || "/";
+}
+
+function logError(label: string, err: unknown): void {
+  if (err instanceof Error) {
+    console.error(`[${label}] ${err.message}`);
+    if (err.stack) console.error(err.stack);
+  } else {
+    console.error(`[${label}]`, err);
+  }
 }
 
 export default async function handler(
@@ -105,6 +114,7 @@ export default async function handler(
   res: VercelResponse,
 ): Promise<void> {
   const path = normalizePath(req.url);
+  console.log(`[api] ${req.method} ${path}`);
 
   if (
     req.method === "GET" &&
@@ -126,7 +136,9 @@ export default async function handler(
 
   if (req.method === "POST" && path === "/api/ingest") {
     try {
+      console.log("[ingest] parsing multipart");
       const files = await parseMultipart(req);
+      console.log(`[ingest] received ${files.length} file(s):`, files.map((f) => `${f.filename} (${f.buffer.length} bytes)`).join(", "));
 
       if (files.length === 0) {
         res.status(400).json({ error: "Please select at least one file" });
@@ -141,16 +153,12 @@ export default async function handler(
       );
 
       if (xlsxFiles.length > 1) {
-        res
-          .status(400)
-          .json({ error: "Please upload only one Excel status file" });
+        res.status(400).json({ error: "Please upload only one Excel status file" });
         return;
       }
 
       if (xlsxFiles.length === 0 && docxFiles.length === 0) {
-        res
-          .status(400)
-          .json({ error: "Only .xlsx and .docx files are supported" });
+        res.status(400).json({ error: "Only .xlsx and .docx files are supported" });
         return;
       }
 
@@ -163,22 +171,22 @@ export default async function handler(
         filename: f.filename,
       }));
 
-      const response = await runIngest({
-        excelFile,
-        docxFiles: docxPayload,
-      });
+      console.log("[ingest] running runIngest");
+      const response = await runIngest({ excelFile, docxFiles: docxPayload });
+      console.log("[ingest] success, workstreams:", (response.signal_bundle as { workstreams?: unknown[] }).workstreams?.length ?? 0);
 
       res.status(200).json(response);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to process files";
-      res.status(400).json({ error: message });
+      logError("ingest", err);
+      const message = err instanceof Error ? err.message : "Failed to process files";
+      res.status(500).json({ error: message });
     }
     return;
   }
 
   if (req.method === "POST" && path === "/api/analyze") {
     try {
+      console.log("[analyze] reading body");
       const body = await readJsonBody(req);
       const bundle = isObj(body) ? body.signal_bundle : undefined;
       if (!isSignalBundle(bundle)) {
@@ -187,17 +195,19 @@ export default async function handler(
         });
         return;
       }
+      console.log("[analyze] running analysis, workstreams:", bundle.workstreams.length);
       const priorEntry = getLastEntry();
       const deltas = getDelta(bundle, priorEntry);
       const result = await runAnalysis(bundle, deltas);
+      console.log("[analyze] done, errors:", (result as { errors?: unknown[] }).errors?.length ?? 0);
       res.status(200).json(result);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to run analysis";
+      logError("analyze", err);
+      const message = err instanceof Error ? err.message : "Failed to run analysis";
       res.status(500).json({ error: message });
     }
     return;
   }
 
-  res.status(404).json({ error: "Not found" });
+  res.status(404).json({ error: "Not found", path });
 }
